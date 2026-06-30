@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Skyline — Weather & Climate</title>
+    <meta name="description" content="Live weather, hourly & 15-day forecast, temperature map, air quality and world population — no API keys.">
+    <meta name="theme-color" content="#2f80ed">
+    <link rel="manifest" href="/manifest.webmanifest">
+    <link rel="apple-touch-icon" href="/static/icons/icon-192.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="theme-clear-day">
+    <div class="atmosphere"></div>
+    <canvas id="fx" class="fx"></canvas>
+
+    <div class="app">
+        <header class="topbar">
+            <div class="brand">Skyline</div>
+            <form id="search-form" class="search">
+                <input id="city-input" type="text" placeholder="Search a city…" autocomplete="off" spellcheck="false">
+                <button type="button" id="voice-btn" class="icon-btn" title="Voice search" aria-label="Voice search">🎤</button>
+                <button type="submit" class="icon-btn" aria-label="Search">
+                    <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                </button>
+            </form>
+            <div class="settings">
+                <button id="unit-toggle" class="pill-btn" title="Switch units">°C</button>
+                <button id="theme-toggle" class="pill-btn" title="Switch theme">🌙</button>
+                <button id="locate-btn" class="pill-btn" title="Use my location">📍</button>
+            </div>
+        </header>
+
+        <div id="saved-bar" class="saved-bar"></div>
+
+        <nav class="tabs">
+            <button class="tab active" data-tab="today">Today</button>
+            <button class="tab" data-tab="forecast">15-Day</button>
+            <button class="tab" data-tab="map">Map</button>
+            <button class="tab" data-tab="population">Population</button>
+        </nav>
+
+        <section id="loader" class="state hidden"><div class="spinner"></div><p>Fetching the sky…</p></section>
+        <section id="error" class="state hidden"><div class="state-emoji">🧭</div><p id="error-text"></p>
+            <button id="retry-btn" class="pill-btn" style="margin-top:14px">Retry</button></section>
+
+        <!-- ============ TODAY ============ -->
+        <section id="panel-today" class="panel">
+            <div id="alerts" class="alerts hidden"></div>
+
+            <div class="now">
+                <div class="place-row">
+                    <p class="place"><span id="city-name"></span><span id="region" class="region"></span></p>
+                    <button id="fav-btn" class="fav-btn" title="Save to favorites">☆</button>
+                </div>
+                <p id="local-clock" class="local-clock"></p>
+                <div class="now-main">
+                    <span id="now-emoji" class="now-emoji"></span>
+                    <div class="now-temp"><span id="now-temp"></span><span class="deg">°</span></div>
+                </div>
+                <p id="now-desc" class="now-desc"></p>
+                <div class="share-row">
+                    <button class="share-btn" data-share="copy" title="Copy summary">📋 Copy</button>
+                    <button class="share-btn" data-share="whatsapp" title="Share on WhatsApp">WhatsApp</button>
+                    <button class="share-btn" data-share="twitter" title="Share on X">X</button>
+                    <button class="share-btn" data-share="telegram" title="Share on Telegram">Telegram</button>
+                </div>
+            </div>
+
+            <div class="card assistant" id="assistant">
+                <h2 class="card-title">✨ Smart assistant</h2>
+                <ul id="assistant-list" class="assistant-list"></ul>
+            </div>
+
+            <div class="details-grid">
+                <div class="tile"><span class="t-label">Feels like</span><span class="t-value" id="feels"></span></div>
+                <div class="tile"><span class="t-label">Humidity</span><span class="t-value" id="humidity"></span></div>
+                <div class="tile"><span class="t-label">Wind</span><span class="t-value" id="wind"></span><span class="t-sub" id="wind-dir"></span></div>
+                <div class="tile"><span class="t-label">Pressure</span><span class="t-value" id="pressure"></span></div>
+                <div class="tile"><span class="t-label">Visibility</span><span class="t-value" id="visibility"></span></div>
+                <div class="tile"><span class="t-label">Cloud cover</span><span class="t-value" id="cloud"></span></div>
+                <div class="tile"><span class="t-label">Dew point</span><span class="t-value" id="dew"></span></div>
+                <div class="tile"><span class="t-label">UV index</span><span class="t-value" id="uv"></span></div>
+                <div class="tile" id="aqi-tile"><span class="t-label">Air quality</span><span class="t-value"><span id="aqi-dot" class="aqi-dot"></span><span id="aqi-value"></span></span><span class="t-sub" id="aqi-label"></span></div>
+                <div class="tile" id="pop-tile"><span class="t-label">City population</span><span class="t-value" id="city-pop"></span></div>
+                <div class="tile"><span class="t-label">Coordinates</span><span class="t-value" id="coords" style="font-size:14px"></span></div>
+                <div class="tile"><span class="t-label">Time zone</span><span class="t-value" id="tz" style="font-size:14px"></span></div>
+            </div>
+
+            <div class="card sun-moon">
+                <div class="sm-item"><span class="sm-icon">🌅</span><span class="sm-label">Sunrise</span><span class="sm-value" id="sunrise"></span></div>
+                <div class="sm-item"><span class="sm-icon">🌇</span><span class="sm-label">Sunset</span><span class="sm-value" id="sunset"></span></div>
+                <div class="sm-item"><span class="sm-icon" id="moon-emoji">🌙</span><span class="sm-label">Moon</span><span class="sm-value" id="moon-name"></span></div>
+            </div>
+
+            <div class="card">
+                <h2 class="card-title">Next 24 hours</h2>
+                <div id="hourly-row" class="hourly-row"></div>
+                <div class="chart-wrap"><canvas id="hourly-chart"></canvas></div>
+            </div>
+        </section>
+
+        <!-- ============ FORECAST ============ -->
+        <section id="panel-forecast" class="panel hidden">
+            <div class="card"><h2 class="card-title">15-day forecast</h2><div id="forecast-row" class="forecast-row"></div></div>
+            <div class="card"><h2 class="card-title">Daily high / low</h2><div class="chart-wrap"><canvas id="daily-chart"></canvas></div></div>
+        </section>
+
+        <!-- ============ MAP ============ -->
+        <section id="panel-map" class="panel hidden">
+            <div class="card">
+                <div class="map-head">
+                    <h2 class="card-title" style="margin:0">Live temperature map</h2>
+                    <label class="radar-toggle"><input type="checkbox" id="radar-check"> 🌧️ Rain radar</label>
+                </div>
+                <p class="card-hint">Coloured dots show each city's current temperature. Click anywhere for local weather.</p>
+                <div id="map"></div>
+                <div class="legend" id="temp-legend"></div>
+                <div id="map-readout" class="map-readout hidden"></div>
+            </div>
+        </section>
+
+        <!-- ============ POPULATION ============ -->
+        <section id="panel-population" class="panel hidden">
+            <div class="card pop-hero">
+                <span class="card-title">World population — live</span>
+                <div id="world-pop" class="world-pop">—</div>
+                <p class="card-hint" id="pop-hint">Estimated, ticking in real time</p>
+            </div>
+            <div class="card">
+                <h2 class="card-title">City population</h2>
+                <form id="city-pop-form" class="search inline-search">
+                    <input id="city-pop-input" type="text" placeholder="Search any city…" autocomplete="off">
+                    <button type="submit" class="icon-btn" aria-label="Search">→</button>
+                </form>
+                <div id="city-pop-result" class="city-pop-result hidden"></div>
+            </div>
+            <div class="card">
+                <h2 class="card-title">Countries by population</h2>
+                <input id="country-filter" class="filter-input" type="text" placeholder="Filter countries…" autocomplete="off">
+                <div id="country-list" class="country-list"></div>
+            </div>
+        </section>
+    </div>
+
+    <footer class="credit">Weather & air quality by Open-Meteo · radar by RainViewer · map © OpenStreetMap · no API keys</footer>
+
+    <script src="/static/vendor/chart.umd.js"></script>
+    <script src="/static/vendor/leaflet/leaflet.js"></script>
+    <script src="/static/app.js"></script>
+    <script>
+      if ("serviceWorker" in navigator) {
+        window.addEventListener("load", () => navigator.serviceWorker.register("/sw.js").catch(() => {}));
+      }
+    </script>
+</body>
+</html>

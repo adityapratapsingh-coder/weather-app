@@ -1,0 +1,16 @@
+{
+  "name": "Skyline — Weather & Climate",
+  "short_name": "Skyline",
+  "description": "Live weather, hourly & 15-day forecast, temperature map, air quality and world population.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#2f80ed",
+  "theme_color": "#2f80ed",
+  "icons": [
+    {"src": "/static/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+    {"src": "/static/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
+    {"src": "/static/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}
+  ]
+}
