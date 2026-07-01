@@ -4,12 +4,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Skyline — Weather & Climate</title>
-    <meta name="description" content="Live weather, hourly & 15-day forecast, temperature map, air quality and world population — no API keys.">
+    <meta name="description" content="Live weather, hourly & multi-day forecast, temperature map, air quality and world population — no API keys.">
     <meta name="theme-color" content="#2f80ed">
     <link rel="manifest" href="/manifest.webmanifest">
+    <link rel="icon" href="/static/icons/favicon.ico" sizes="any">
     <link rel="icon" type="image/png" sizes="192x192" href="/static/icons/icon-192.png">
     <link rel="icon" type="image/png" sizes="512x512" href="/static/icons/icon-512.png">
-    <link rel="shortcut icon" href="/static/icons/icon-192.png">
+    <link rel="shortcut icon" href="/static/icons/favicon.ico">
     <link rel="apple-touch-icon" href="/static/icons/icon-192.png">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -42,7 +43,7 @@
 
         <nav class="tabs">
             <button class="tab active" data-tab="today">Today</button>
-            <button class="tab" data-tab="forecast">15-Day</button>
+            <button class="tab" data-tab="forecast">Next Days</button>
             <button class="tab" data-tab="map">Map</button>
             <button class="tab" data-tab="population">Population</button>
         </nav>
@@ -101,7 +102,7 @@
             </div>
 
             <div class="card">
-                <h2 class="card-title">Next 24 hours</h2>
+                <h2 class="card-title">Next Hours</h2>
                 <div id="hourly-row" class="hourly-row"></div>
                 <div class="chart-wrap"><canvas id="hourly-chart"></canvas></div>
             </div>
@@ -109,7 +110,7 @@
 
         <!-- ============ FORECAST ============ -->
         <section id="panel-forecast" class="panel hidden">
-            <div class="card"><h2 class="card-title">15-day forecast</h2><div id="forecast-row" class="forecast-row"></div></div>
+            <div class="card"><h2 class="card-title">Next Days</h2><div id="forecast-row" class="forecast-row"></div></div>
             <div class="card"><h2 class="card-title">Daily high / low</h2><div class="chart-wrap"><canvas id="daily-chart"></canvas></div></div>
         </section>
 
