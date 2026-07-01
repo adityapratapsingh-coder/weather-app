@@ -52,8 +52,13 @@ def api_weather_by_city(city: str):
         return JSONResponse({"error": "Enter a city name to search."}, status_code=400)
     try:
         data = weather.get_weather_by_city(city)
-    except Exception:
-        return JSONResponse(SERVICE_ERROR, status_code=502)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(
+            {"error": SERVICE_ERROR["error"], "debug": f"{type(e).__name__}: {e}"},
+            status_code=502,
+        )
     if data is None:
         return JSONResponse({"error": f"No match for \u201c{city}\u201d. Try a different spelling."}, status_code=404)
     return data
