@@ -1,22 +1,28 @@
 """
-Weather data layer (Open-Meteo — free, no API key).
+Weather data layer (OpenWeatherMap).
 
-  Geocoding:    https://geocoding-api.open-meteo.com/v1/search
-  Forecast:     https://api.open-meteo.com/v1/forecast
-  Air Quality:  https://air-quality-api.open-meteo.com/v1/air-quality
+  Geocoding:     https://api.openweathermap.org/geo/1.0/direct
+  Current:       https://api.openweathermap.org/data/2.5/weather
+  5d/3h Forecast:https://api.openweathermap.org/data/2.5/forecast
+  Air Pollution: https://api.openweathermap.org/data/2.5/air_pollution
 
-Moon phase is computed locally. HTTP uses Python's standard library only.
+The API key is read from the OWM_API_KEY environment variable (never hard-coded).
+Moon phase is computed locally.
 """
-import json
+import os
 import math
 import datetime
 import requests
 
-GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search"
-FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
-AIR_QUALITY_URL = "https://air-quality-api.open-meteo.com/v1/air-quality"
+OWM_API_KEY = os.environ.get("OWM_API_KEY", "")
 
-FORECAST_DAYS = 15
+GEOCODE_URL = "https://api.openweathermap.org/geo/1.0/direct"
+REVERSE_URL = "https://api.openweathermap.org/geo/1.0/reverse"
+CURRENT_URL = "https://api.openweathermap.org/data/2.5/weather"
+FORECAST_URL = "https://api.openweathermap.org/data/2.5/forecast"
+AIR_QUALITY_URL = "https://api.openweathermap.org/data/2.5/air_pollution"
+
+FORECAST_DAYS = 6
 
 WEATHER_CODES = {
     0: ("Clear sky", "\u2600\ufe0f"), 1: ("Mainly clear", "\U0001f324\ufe0f"), 2: ("Partly cloudy", "\u26c5"),
@@ -137,66 +143,159 @@ def moon_phase(date=None):
     return {"name": name, "emoji": emoji, "illumination": round(abs(0.5 - phase) * -200 + 100)}
 
 
+# ── OpenWeatherMap helpers ───────────────────────────────────────────────
+
+def _owm_to_wmo(owm_id):
+    """Map an OpenWeatherMap condition id to the WMO code used by describe()/theme_for()."""
+    if owm_id == 800: return 0
+    if owm_id == 801: return 1
+    if owm_id == 802: return 2
+    if owm_id in (803, 804): return 3
+    if 200 <= owm_id < 300: return 95            # thunderstorm
+    if 300 <= owm_id < 400: return 53            # drizzle
+    if owm_id in (500,): return 61
+    if owm_id in (501,): return 63
+    if owm_id in (502, 503, 504): return 65
+    if owm_id in (511,): return 66
+    if owm_id in (520, 521): return 80
+    if owm_id in (522, 531): return 82
+    if owm_id in (600, 615, 620): return 71
+    if owm_id in (601, 616, 621): return 73
+    if owm_id in (602, 622): return 75
+    if owm_id in (611, 612, 613): return 85
+    if 700 <= owm_id < 800: return 45            # mist/fog/haze/etc.
+    return 3
+
+
+def _dew_point(temp_c, rh):
+    if temp_c is None or rh is None or rh <= 0:
+        return None
+    a, b = 17.27, 237.7
+    g = (a * temp_c) / (b + temp_c) + math.log(rh / 100.0)
+    return round((b * g) / (a - g))
+
+
+def _pm25_to_aqi(pm):
+    """Convert a PM2.5 concentration (µg/m³) to the US AQI number."""
+    if pm is None:
+        return None
+    bp = [(0.0, 12.0, 0, 50), (12.1, 35.4, 51, 100), (35.5, 55.4, 101, 150),
+          (55.5, 150.4, 151, 200), (150.5, 250.4, 201, 300),
+          (250.5, 350.4, 301, 400), (350.5, 500.4, 401, 500)]
+    for lo, hi, alo, ahi in bp:
+        if lo <= pm <= hi:
+            return round((ahi - alo) / (hi - lo) * (pm - lo) + alo)
+    return 500 if pm > 500.4 else None
+
+
+def _local_iso(epoch, offset):
+    """UTC epoch seconds + timezone offset -> 'YYYY-MM-DDTHH:MM' local string."""
+    if epoch is None:
+        return None
+    dt = datetime.datetime.utcfromtimestamp(epoch + (offset or 0))
+    return dt.strftime("%Y-%m-%dT%H:%M")
+
+
+def _require_key():
+    if not OWM_API_KEY:
+        raise RuntimeError("OWM_API_KEY environment variable is not set")
+
+
+# ── Data fetching ────────────────────────────────────────────────────────
+
 def geocode_city(city):
-    data = _get_json(GEOCODE_URL, {"name": city, "count": 1, "language": "en", "format": "json"})
-    results = data.get("results")
-    if not results: return None
-    r = results[0]
-    region = ", ".join(p for p in [r.get("admin1"), r.get("country")] if p)
-    return {"name": r["name"], "region": region, "country": r.get("country", ""),
-            "latitude": r["latitude"], "longitude": r["longitude"], "population": r.get("population")}
+    _require_key()
+    data = _get_json(GEOCODE_URL, {"q": city, "limit": 1, "appid": OWM_API_KEY})
+    if not data:
+        return None
+    r = data[0]
+    region = ", ".join(p for p in [r.get("state"), r.get("country")] if p)
+    return {"name": r.get("name", city), "region": region, "country": r.get("country", ""),
+            "latitude": r["lat"], "longitude": r["lon"], "population": None}
 
 
-def _fetch_forecast(latitude, longitude):
-    return _get_json(FORECAST_URL, {
-        "latitude": latitude, "longitude": longitude,
-        "current": "temperature_2m,relative_humidity_2m,apparent_temperature,is_day,weather_code,"
-                   "wind_speed_10m,wind_direction_10m,surface_pressure,cloud_cover,dew_point_2m",
-        "hourly": "temperature_2m,weather_code,relative_humidity_2m,precipitation_probability,visibility,uv_index",
-        "daily": "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,"
-                 "uv_index_max,sunrise,sunset",
-        "timezone": "auto", "forecast_days": FORECAST_DAYS,
-    })
-
-
-def _fetch_air_quality(latitude, longitude):
+def _reverse_name(lat, lon):
     try:
-        data = _get_json(AIR_QUALITY_URL, {"latitude": latitude, "longitude": longitude,
-                                           "current": "us_aqi,pm2_5,pm10", "timezone": "auto"})
-        cur = data.get("current", {})
-        value = cur.get("us_aqi")
+        data = _get_json(REVERSE_URL, {"lat": lat, "lon": lon, "limit": 1, "appid": OWM_API_KEY})
+        if data:
+            r = data[0]
+            region = ", ".join(p for p in [r.get("state"), r.get("country")] if p)
+            return {"name": r.get("name", "Selected location"), "region": region,
+                    "country": r.get("country", ""), "latitude": lat, "longitude": lon, "population": None}
+    except Exception:
+        pass
+    return {"name": "Selected location", "region": "", "country": "",
+            "latitude": lat, "longitude": lon, "population": None}
+
+
+def _fetch_current(lat, lon):
+    return _get_json(CURRENT_URL, {"lat": lat, "lon": lon, "units": "metric", "appid": OWM_API_KEY})
+
+
+def _fetch_forecast(lat, lon):
+    return _get_json(FORECAST_URL, {"lat": lat, "lon": lon, "units": "metric", "appid": OWM_API_KEY})
+
+
+def _fetch_air_quality(lat, lon):
+    try:
+        data = _get_json(AIR_QUALITY_URL, {"lat": lat, "lon": lon, "appid": OWM_API_KEY})
+        entry = (data.get("list") or [{}])[0]
+        comp = entry.get("components", {})
+        pm25 = comp.get("pm2_5")
+        value = _pm25_to_aqi(pm25)
         label, color = aqi_category(value)
         return {"value": value, "label": label, "color": color,
-                "pm2_5": cur.get("pm2_5"), "pm10": cur.get("pm10")}
+                "pm2_5": pm25, "pm10": comp.get("pm10")}
     except Exception:
         return None
 
 
-def _current_hour_index(times, current_time):
-    current_hour = current_time[:13] + ":00"
-    for i, t in enumerate(times):
-        if t >= current_hour:
-            return i
-    return 0
-
-
-def _hourly_next_24(hourly, start):
-    times = hourly["time"]
+def _hourly_next_24(forecast_list, offset):
     rows = []
-    for i in range(start, min(start + 24, len(times))):
-        _, emoji = describe(hourly["weather_code"][i])
-        rows.append({"time": times[i], "temp": round(hourly["temperature_2m"][i]), "emoji": emoji,
-                     "humidity": hourly["relative_humidity_2m"][i],
-                     "rain_chance": hourly["precipitation_probability"][i]})
+    for item in forecast_list[:8]:            # 8 x 3h = 24h
+        wid = (item.get("weather") or [{}])[0].get("id", 800)
+        _, emoji = describe(_owm_to_wmo(wid))
+        rows.append({"time": _local_iso(item["dt"], offset),
+                     "temp": round(item["main"]["temp"]), "emoji": emoji,
+                     "humidity": item["main"].get("humidity"),
+                     "rain_chance": round(item.get("pop", 0) * 100)})
     return rows
+
+
+def _daily_from_forecast(forecast_list, offset):
+    days = {}
+    order = []
+    for item in forecast_list:
+        local = datetime.datetime.utcfromtimestamp(item["dt"] + (offset or 0))
+        key = local.strftime("%Y-%m-%d")
+        if key not in days:
+            days[key] = {"min": [], "max": [], "pop": [], "noon": None, "noon_gap": 99}
+            order.append(key)
+        d = days[key]
+        d["min"].append(item["main"]["temp_min"])
+        d["max"].append(item["main"]["temp_max"])
+        d["pop"].append(item.get("pop", 0))
+        gap = abs(local.hour - 12)
+        if gap < d["noon_gap"]:
+            d["noon_gap"] = gap
+            d["noon"] = (item.get("weather") or [{}])[0].get("id", 800)
+    out = []
+    for key in order[:FORECAST_DAYS]:
+        d = days[key]
+        wmo = _owm_to_wmo(d["noon"])
+        desc, emoji = describe(wmo)
+        out.append({"date": key, "max": round(max(d["max"])), "min": round(min(d["min"])),
+                    "description": desc, "emoji": emoji,
+                    "rain_chance": round(max(d["pop"]) * 100), "uv_max": None})
+    return out
 
 
 def _alerts(temp, code, aqi):
     out = []
     if temp is not None and temp >= 40:
-        out.append({"level": "severe", "text": f"Heatwave advisory — {temp}\u00b0C. Stay hydrated and avoid the midday sun."})
+        out.append({"level": "severe", "text": f"Heatwave advisory \u2014 {temp}\u00b0C. Stay hydrated and avoid the midday sun."})
     if temp is not None and temp <= -5:
-        out.append({"level": "severe", "text": f"Extreme cold — {temp}\u00b0C. Dress in warm layers."})
+        out.append({"level": "severe", "text": f"Extreme cold \u2014 {temp}\u00b0C. Dress in warm layers."})
     if code in (95, 96, 99):
         out.append({"level": "warning", "text": "Thunderstorm in the area. Seek shelter if outdoors."})
     if code in (65, 82):
@@ -208,53 +307,49 @@ def _alerts(temp, code, aqi):
     return out
 
 
-def _build_payload(location, data, aqi):
-    current = data["current"]
-    code = current["weather_code"]
-    is_day = bool(current["is_day"])
+def _build_payload(location, current, forecast, aqi):
+    offset = current.get("timezone", 0)
+    w = (current.get("weather") or [{}])[0]
+    owm_id = w.get("id", 800)
+    code = _owm_to_wmo(owm_id)
+    icon = w.get("icon", "01d")
+    is_day = icon.endswith("d")
     desc, emoji = describe(code)
     if not is_day and code in (0, 1):
         emoji = "\U0001f319"
 
-    hourly = data["hourly"]
-    idx = _current_hour_index(hourly["time"], current["time"])
-    visibility_m = hourly["visibility"][idx] if hourly.get("visibility") else None
-    uv_now = hourly["uv_index"][idx] if hourly.get("uv_index") else None
-
-    daily = data["daily"]
-    forecast = []
-    for i in range(len(daily["time"])):
-        d_desc, d_emoji = describe(daily["weather_code"][i])
-        forecast.append({"date": daily["time"][i], "max": round(daily["temperature_2m_max"][i]),
-                         "min": round(daily["temperature_2m_min"][i]), "description": d_desc,
-                         "emoji": d_emoji, "rain_chance": daily["precipitation_probability_max"][i],
-                         "uv_max": daily["uv_index_max"][i]})
-
-    sunrise = daily["sunrise"][0] if daily.get("sunrise") else None
-    sunset = daily["sunset"][0] if daily.get("sunset") else None
+    main = current.get("main", {})
+    wind = current.get("wind", {})
+    temp = round(main.get("temp")) if main.get("temp") is not None else None
+    humidity = main.get("humidity")
+    vis_m = current.get("visibility")
+    flist = forecast.get("list", [])
 
     return {
         "location": location,
-        "utc_offset_seconds": data.get("utc_offset_seconds", 0),
-        "timezone": data.get("timezone", ""),
+        "utc_offset_seconds": offset,
+        "timezone": "",
         "current": {
-            "temperature": round(current["temperature_2m"]), "feels_like": round(current["apparent_temperature"]),
-            "humidity": current["relative_humidity_2m"], "wind_speed": round(current["wind_speed_10m"]),
-            "wind_dir": current.get("wind_direction_10m"), "wind_compass": compass(current.get("wind_direction_10m")),
-            "dew_point": round(current["dew_point_2m"]) if current.get("dew_point_2m") is not None else None,
-            "pressure": round(current["surface_pressure"]) if current.get("surface_pressure") is not None else None,
-            "cloud_cover": current.get("cloud_cover"),
-            "visibility_km": round(visibility_m / 1000, 1) if visibility_m is not None else None,
-            "uv_index": round(uv_now, 1) if uv_now is not None else None,
-            "uv_label": uv_category(uv_now),
+            "temperature": temp,
+            "feels_like": round(main.get("feels_like")) if main.get("feels_like") is not None else temp,
+            "humidity": humidity,
+            "wind_speed": round(wind.get("speed", 0) * 3.6),      # m/s -> km/h
+            "wind_dir": wind.get("deg"), "wind_compass": compass(wind.get("deg")),
+            "dew_point": _dew_point(main.get("temp"), humidity),
+            "pressure": main.get("pressure"),
+            "cloud_cover": (current.get("clouds") or {}).get("all"),
+            "visibility_km": round(vis_m / 1000, 1) if vis_m is not None else None,
+            "uv_index": None, "uv_label": uv_category(None),
             "is_day": is_day, "description": desc, "emoji": emoji, "theme": theme_for(code, is_day),
-            "local_time": current["time"], "sunrise": sunrise, "sunset": sunset,
+            "local_time": _local_iso(current.get("dt"), offset),
+            "sunrise": _local_iso((current.get("sys") or {}).get("sunrise"), offset),
+            "sunset": _local_iso((current.get("sys") or {}).get("sunset"), offset),
         },
         "moon": moon_phase(),
-        "hourly": _hourly_next_24(hourly, idx),
-        "forecast": forecast,
+        "hourly": _hourly_next_24(flist, offset),
+        "forecast": _daily_from_forecast(flist, offset),
         "aqi": aqi,
-        "alerts": _alerts(round(current["temperature_2m"]), code, aqi),
+        "alerts": _alerts(temp, code, aqi),
     }
 
 
@@ -262,30 +357,32 @@ def get_weather_by_city(city):
     location = geocode_city(city)
     if location is None:
         return None
-    data = _fetch_forecast(location["latitude"], location["longitude"])
+    current = _fetch_current(location["latitude"], location["longitude"])
+    forecast = _fetch_forecast(location["latitude"], location["longitude"])
     aqi = _fetch_air_quality(location["latitude"], location["longitude"])
-    return _build_payload(location, data, aqi)
+    return _build_payload(location, current, forecast, aqi)
 
 
 def get_weather_by_coords(latitude, longitude):
-    data = _fetch_forecast(latitude, longitude)
+    _require_key()
+    current = _fetch_current(latitude, longitude)
+    forecast = _fetch_forecast(latitude, longitude)
     aqi = _fetch_air_quality(latitude, longitude)
-    location = {"name": "Selected location", "region": "", "country": "",
-                "latitude": latitude, "longitude": longitude, "population": None}
-    return _build_payload(location, data, aqi)
+    location = _reverse_name(latitude, longitude)
+    if current.get("name"):
+        location["name"] = current["name"]
+    return _build_payload(location, current, forecast, aqi)
 
 
 def get_heatmap():
-    lats = [c[1] for c in HEATMAP_CITIES]
-    lons = [c[2] for c in HEATMAP_CITIES]
-    data = _get_json(FORECAST_URL, {"latitude": ",".join(str(x) for x in lats),
-                                    "longitude": ",".join(str(x) for x in lons),
-                                    "current": "temperature_2m,weather_code", "timezone": "auto"})
-    items = data if isinstance(data, list) else [data]
+    _require_key()
     cities = []
-    for (name, lat, lon), entry in zip(HEATMAP_CITIES, items):
-        cur = entry.get("current", {})
-        temp = cur.get("temperature_2m")
-        cities.append({"name": name, "lat": lat, "lon": lon,
-                       "temp": round(temp) if temp is not None else None})
+    for name, lat, lon in HEATMAP_CITIES:
+        try:
+            cur = _fetch_current(lat, lon)
+            temp = cur.get("main", {}).get("temp")
+            cities.append({"name": name, "lat": lat, "lon": lon,
+                           "temp": round(temp) if temp is not None else None})
+        except Exception:
+            cities.append({"name": name, "lat": lat, "lon": lon, "temp": None})
     return cities
