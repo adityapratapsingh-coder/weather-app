@@ -45,6 +45,12 @@ def service_worker():
                     media_type="application/javascript")
 
 
+@app.get("/favicon.ico")
+def favicon():
+    return Response((BASE_DIR / "static" / "icons" / "icon-192.png").read_bytes(),
+                    media_type="image/png")
+
+
 @app.get("/api/weather")
 def api_weather_by_city(city: str):
     city = (city or "").strip()
