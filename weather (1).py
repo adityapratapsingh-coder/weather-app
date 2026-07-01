@@ -51,11 +51,42 @@ HEATMAP_CITIES = [
 ]
 
 
-def _get_json(url, params):
-    response = requests.get(url, params=params, timeout=15,
-                            headers={"User-Agent": "WeatherApp/3.0"})
-    response.raise_for_status()
-    return response.json()
+import time
+
+_CACHE = {}          # simple in-memory cache: key -> (expiry_ts, data)
+_CACHE_TTL = 600     # seconds (10 minutes)
+
+
+def _get_json(url, params, retries=4):
+    # serve from cache if fresh (fewer API calls => far less likely to be rate-limited)
+    key = url + "?" + "&".join(f"{k}={v}" for k, v in sorted(params.items()))
+    hit = _CACHE.get(key)
+    if hit and hit[0] > time.time():
+        return hit[1]
+
+    last_error = None
+    for attempt in range(retries):
+        try:
+            response = requests.get(url, params=params, timeout=20,
+                                    headers={"User-Agent": "WeatherApp/3.0"})
+            # Open-Meteo throttles shared/cloud IPs with 429 (and sometimes 5xx) — back off and retry
+            if response.status_code == 429 or response.status_code >= 500:
+                wait = float(response.headers.get("Retry-After", 0)) or (1.5 * (attempt + 1))
+                last_error = requests.HTTPError(f"{response.status_code} from {url}")
+                time.sleep(min(wait, 6))
+                continue
+            response.raise_for_status()
+            data = response.json()
+            _CACHE[key] = (time.time() + _CACHE_TTL, data)
+            return data
+        except requests.RequestException as e:
+            last_error = e
+            time.sleep(1.5 * (attempt + 1))
+
+    # everything failed — fall back to stale cache if we have any, else raise
+    if hit:
+        return hit[1]
+    raise last_error if last_error else RuntimeError("request failed")
 
 
 def describe(code):
