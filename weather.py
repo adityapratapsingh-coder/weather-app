@@ -10,8 +10,7 @@ Moon phase is computed locally. HTTP uses Python's standard library only.
 import json
 import math
 import datetime
-import urllib.request
-import urllib.parse
+import requests
 
 GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search"
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
@@ -53,10 +52,10 @@ HEATMAP_CITIES = [
 
 
 def _get_json(url, params):
-    query = urllib.parse.urlencode(params)
-    request = urllib.request.Request(f"{url}?{query}", headers={"User-Agent": "WeatherApp/3.0"})
-    with urllib.request.urlopen(request, timeout=15) as response:
-        return json.loads(response.read().decode("utf-8"))
+    response = requests.get(url, params=params, timeout=15,
+                            headers={"User-Agent": "WeatherApp/3.0"})
+    response.raise_for_status()
+    return response.json()
 
 
 def describe(code):
